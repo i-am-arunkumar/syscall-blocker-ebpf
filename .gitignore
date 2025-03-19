@@ -1,0 +1,4 @@
+build/
+main.o
+bpf_prog.o
+syscall_blocker
