@@ -1,13 +1,12 @@
 // filepath: /sys-call-blocker/src/syscall_blocker.bpf.c
 
-// trace logs : $ sudo cat /sys/kernel/debug/tracing/trace_pipe
-
 #include "syscall_blocker.h"
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <seccomp.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +29,12 @@ void get_container_info(const char *cgroup_path, char *container_type,
                         char *container_id);
 int kill_container_prompt();
 
+// Signal handler function to gracefully stop this program
+volatile sig_atomic_t stop = 0;
+void handle_signal(int sig) {
+  stop = 1; // Set flag to exit loop
+}
+
 // handles events from ebpf program
 static int handle_event(void *ctx, void *data, size_t len) {
   char container_type[10], container_id[13];
@@ -37,7 +42,8 @@ static int handle_event(void *ctx, void *data, size_t len) {
   char *syscall_name =
       seccomp_syscall_resolve_num_arch(SCMP_ARCH_X86_64, e->syscall_no);
   get_container_info(e->cgroup_path, container_type, container_id);
-  printf("Event : Blocked syscall %s initiated by PID %d (%s) - container = %s (%s) "
+  printf("Event : Blocked syscall %s initiated by PID %d (%s) - container = %s "
+         "(%s) "
          "UID=%d "
          "MNTNS_ID=%lu.\n",
          syscall_name, e->pid, e->comm, container_id, container_type, e->uid,
@@ -55,8 +61,6 @@ int main(int argc, char *argv[]) {
   struct ring_buffer *rb;
 
   // parse command line arguments
-  // find uid by "id -u"
-  // find mntns_id by "stat -L -c %i /proc/self/ns/mnt"
   char syscall_names[MAX_ENTRIES][30];
   bool traceonly = false;
 
@@ -226,14 +230,17 @@ int main(int argc, char *argv[]) {
   printf("eBPF program loaded and attached.\n");
   printf("Press : k - kill container, esc -  Exit\n\n");
 
+  // for gracefully exiting the program through signals
+  signal(SIGINT, handle_signal);
+  signal(SIGTERM, handle_signal);
+
   // Poll ring buffer and also the user inputs
   set_nonblocking_mode(1);
   char c;
-  while (1) {
+  while (!stop) {
     if (read(STDIN_FILENO, &c, 1) > 0) {
-      if (c == 27) {
-        printf("Exiting...\n");
-        break;
+      if (c == 27) { // exit through ESC
+        stop = 1;
       }
       if (c == 107) {
         set_nonblocking_mode(0);
@@ -244,6 +251,7 @@ int main(int argc, char *argv[]) {
     ring_buffer__poll(rb, 100);
   }
   set_nonblocking_mode(0);
+  printf("Exiting...\n");
 
 cleanup:
   syscall_blocker_bpf__destroy(skel);
@@ -337,7 +345,6 @@ void set_nonblocking_mode(int enable) {
   }
 }
 
-
 // For getting container id and its type by decoding cgroup_path.
 void get_container_info(const char *cgroup_path, char *container_type,
                         char *container_id) {
@@ -365,7 +372,8 @@ void get_container_info(const char *cgroup_path, char *container_type,
     return;
   }
 
-  strcpy(container_id, cgroup_path);
+  strncpy(container_id, cgroup_path, sizeof(container_id) - 1);
+  container_id[sizeof(container_id) - 1] = '\0';
   strcpy(container_type, "unknown");
 }
 
