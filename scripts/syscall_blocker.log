@@ -1,13 +1,13 @@
 bpf program has been loaded and verified.
 Configuration written to BPF map: 
 UIDs=2001 
-MNT_NS_IDs=4026532679 
+MNT_NS_IDs=4026537481 
 SYSCALL_NOs=83 107 
 eBPF kprobe program has been attached to the syscall function __x64_sys_mkdir.
 eBPF kprobe program has been attached to the syscall function __x64_sys_geteuid.
 eBPF program loaded and attached.
 Press : k - kill container, esc -  Exit
 
-Event : Blocked syscall mkdir initiated by PID 270281 (mkdir) - container = d8b47427b1b2 (docker) UID=2001 MNTNS_ID=4026532679.
-Event : Blocked syscall geteuid initiated by PID 270321 (whoami) - container = d8b47427b1b2 (docker) UID=2001 MNTNS_ID=4026532679.
+Event : Blocked syscall mkdir initiated by PID 310315 (mkdir) - container = b908ba6630e2 (docker) UID=2001 MNTNS_ID=4026537481.
+Event : Blocked syscall geteuid initiated by PID 310348 (whoami) - container = b908ba6630e2 (docker) UID=2001 MNTNS_ID=4026537481.
 Exiting...

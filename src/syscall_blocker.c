@@ -264,12 +264,12 @@ void print_help(const char *name) {
   printf(
       "Usage: %s --users <user ids> --mntnss <mount namspace ids> --syscalls "
       "<syscall names>\n\n"
-      "blocks system calls"
+      "Intercepts and blocks syscalls by certain users and mount namespaces using eBPF kprobes."
       "The available options :\n\n"
-      "--syscalls     syscall name to intercept\n"
-      "--users        user id to filter\n"
-      "--mntnss       mount namespace ids to filter (default: IPv4)\n"
-      "--traceonly    attach only tracepoint (can't block syscall)",
+      "--syscalls     syscall names to intercept\n"
+      "--users        user ids to filter\n"
+      "--mntnss       mount namespace ids to filter\n"
+      "--traceonly    attach only to tracepoint (can't block syscall) (default : false)",
       name);
 }
 
