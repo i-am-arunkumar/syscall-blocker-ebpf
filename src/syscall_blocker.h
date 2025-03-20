@@ -4,6 +4,8 @@
 // definition for the configurations from user program to ebpf program.
 
 #define MAX_ENTRIES 5
+#define CONTAINER_ID_LEN 65
+#define MAX_CGROUP_LEN 100
 
 struct Configuration {
   unsigned long uids[MAX_ENTRIES];  
@@ -16,7 +18,10 @@ struct Configuration {
 
 // definition for the events passed from ebpf program to the user program
 struct event {
-  char container_id[64];
+  char cgroup_path[100];
   int pid;
+  int uid;
+  unsigned long mntns_id;
+  int syscall_no;
   char comm[16];
 };

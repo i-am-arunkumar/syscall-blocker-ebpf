@@ -1,12 +1,11 @@
 // filepath: /sys-call-blocker/src/syscall_blocker.bpf.c
 
-// trace logs : $ sudo cat /sys/kernel/debug/tracing/trace_pipe
-
 #include "syscall_blocker.h"
 #include "vmlinux.h"
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 #include <errno.h>
 
 // Define a BPF map to pass configurations to ebpf program
@@ -19,12 +18,11 @@ struct {
 
 // Define a BPF ring buffer to stream the list of containers to user space
 // program
-/* struct {
+struct {
   __uint(type, BPF_MAP_TYPE_RINGBUF);
-  __uint(max_entries, 256 * 1024);
+  __uint(max_entries, 1 << 16);
 } events SEC(".maps");
 
- */
 /**
  * This kprobe program  is attached to the desired syscalls in user space
  * program. It matches the current user id or mount namespace id with the ids
@@ -58,10 +56,54 @@ int block_syscall(struct pt_regs *ctx) {
     if ((i < MAX_ENTRIES && uid == config->uids[i]) ||
         (i < MAX_ENTRIES && mnt_ns == config->mntns_ids[i])) {
       u32 pid = bpf_get_current_pid_tgid() >> 32;
-      bpf_printk("PID : %lu - syscall blocked through kprobe: UID - %lu and "
-                 "MNT_NS id - %lu\n",
-                 pid, uid, mnt_ns);
-      bpf_override_return(ctx, EACCES); // inject error to block the syscall
+      int syscall_no = PT_REGS_PARM2(ctx);
+      bpf_override_return(ctx, -EACCES); // inject error to block the syscall
+
+      // checking cgroup path for container from where the syscall invoked
+      char cgroup_path[MAX_CGROUP_LEN];
+      struct cgroup *cgrp;
+      struct cgroup_subsys_state *css;
+      struct kernfs_node *kn;
+      int cgroup_path_len = 0;
+      if (bpf_probe_read_kernel(&css, sizeof(&css),
+                                &task->cgroups->subsys[0]) == 0) {
+        if (bpf_probe_read_kernel(&cgrp, sizeof(&cgrp), &css->cgroup) == 0) {
+          if (bpf_probe_read_kernel(&kn, sizeof(&kn), &cgrp->kn) == 0) {
+            if (kn != NULL) {
+              // Read the `name` pointer
+              char *name_ptr;
+              if (bpf_probe_read_kernel(&name_ptr, sizeof(name_ptr),
+                                        &kn->name) == 0) {
+                if (name_ptr != NULL) {
+                  cgroup_path_len = bpf_probe_read_kernel_str(
+                      cgroup_path, sizeof(cgroup_path), name_ptr);
+                }
+              }
+            }
+          }
+        }
+      }
+      // prepare event to send to user-space program.
+      struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+      if (!e) {
+        bpf_printk(
+            "PID : %lu - syscall %d blocked through kprobe: UID - %lu and "
+            "MNT_NS id - %lu\n",
+            pid, syscall_no, uid, mnt_ns);
+        return 0;
+      }
+      e->pid = pid;
+
+      if (cgroup_path_len > 0 && cgroup_path_len < MAX_CGROUP_LEN) {
+        for (int i = 0; i < cgroup_path_len && i < MAX_CGROUP_LEN; i++) {
+          e->cgroup_path[i] = cgroup_path[i];
+        }
+      }
+      bpf_get_current_comm(&e->comm, sizeof(e->comm));
+      e->mntns_id = mnt_ns;
+      e->uid = uid;
+      e->syscall_no = syscall_no;
+      bpf_ringbuf_submit(e, 0);
       return 0;
     }
   }
@@ -76,7 +118,7 @@ int block_syscall(struct pt_regs *ctx) {
 SEC("tracepoint/raw_syscalls/sys_enter")
 int trace_syscall(struct trace_event_raw_sys_enter *ctx) {
 
-  unsigned int syscall_id = ctx->id;
+  unsigned int syscall_no = ctx->id;
 
   struct task_struct *task = (struct task_struct *)bpf_get_current_task_btf();
 
@@ -94,7 +136,7 @@ int trace_syscall(struct trace_event_raw_sys_enter *ctx) {
   // check if it is the target syscall
   bool is_target = false;
   for (int i = 0; i < config->count_syscalls && i < MAX_ENTRIES; i++) {
-    if (syscall_id == config->syscall_nums[i]) {
+    if (syscall_no == config->syscall_nums[i]) {
       is_target = true;
       break;
     }
@@ -113,10 +155,51 @@ int trace_syscall(struct trace_event_raw_sys_enter *ctx) {
     if ((i < MAX_ENTRIES && uid == config->uids[i]) ||
         (i < MAX_ENTRIES && mnt_ns == config->mntns_ids[i])) {
       u32 pid = bpf_get_current_pid_tgid() >> 32;
-      bpf_printk(
-          "PID : %lu - syscall %d detected in tracepoint -  UID : %d and "
-          "MNT_NS : %lu\n",
-          pid, syscall_id, uid, mnt_ns);
+      // checking cgroup path for container from where the syscall invoked
+      char cgroup_path[MAX_CGROUP_LEN];
+      struct cgroup *cgrp;
+      struct cgroup_subsys_state *css;
+      struct kernfs_node *kn;
+      int cgroup_path_len = 0;
+      if (bpf_probe_read_kernel(&css, sizeof(&css),
+                                &task->cgroups->subsys[0]) == 0) {
+        if (bpf_probe_read_kernel(&cgrp, sizeof(&cgrp), &css->cgroup) == 0) {
+          if (bpf_probe_read_kernel(&kn, sizeof(&kn), &cgrp->kn) == 0) {
+            if (kn != NULL) {
+              // Read the `name` pointer
+              char *name_ptr;
+              if (bpf_probe_read_kernel(&name_ptr, sizeof(name_ptr),
+                                        &kn->name) == 0) {
+                if (name_ptr != NULL) {
+                  cgroup_path_len = bpf_probe_read_kernel_str(
+                      cgroup_path, sizeof(cgroup_path), name_ptr);
+                }
+              }
+            }
+          }
+        }
+      }
+      // prepare event to send to user-space program.
+      struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+      if (!e) {
+        bpf_printk(
+            "PID : %lu - syscall %d traced through tracepoint: UID - %lu and "
+            "MNT_NS id - %lu\n",
+            pid, syscall_no, uid, mnt_ns);
+        return 0;
+      }
+      e->pid = pid;
+
+      if (cgroup_path_len > 0 && cgroup_path_len < MAX_CGROUP_LEN) {
+        for (int i = 0; i < cgroup_path_len && i < MAX_CGROUP_LEN; i++) {
+          e->cgroup_path[i] = cgroup_path[i];
+        }
+      }
+      bpf_get_current_comm(&e->comm, sizeof(e->comm));
+      e->mntns_id = mnt_ns;
+      e->uid = uid;
+      e->syscall_no = syscall_no;
+      bpf_ringbuf_submit(e, 0);
       return 0;
     }
   }
