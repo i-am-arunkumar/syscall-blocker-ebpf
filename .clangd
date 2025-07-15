@@ -1,0 +1,7 @@
+CompileFlags:
+  Add: [-Wno-unknown-warning-option, -I.output, -I./libbpf/include/uapi, -I../vmlinux/x86/, -I../build]
+  Remove: [-mfp16-format=ieee, -fno-reorder-functions ]
+Diagnostics:
+  UnusedIncludes: Strict
+  Suppress:
+    - drv_unknown_argument
